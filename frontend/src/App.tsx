@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { Toaster } from 'react-hot-toast'
 import Sidebar from './components/Sidebar'
 import FileUploader from './components/FileUploader'
@@ -11,9 +11,16 @@ import { textbookApi, knowledgeApi } from './services/api'
 
 export default function App() {
   const { sidebarTab, setTextbooks, setGraph, setKnowledgePoints } = useAppStore()
+  const pollingRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     loadData()
+    startPolling()
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+      }
+    }
   }, [])
 
   const loadData = async () => {
@@ -25,6 +32,29 @@ export default function App() {
       const kps = await knowledgeApi.getPoints()
       setKnowledgePoints(kps)
     } catch {}
+  }
+
+  const startPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+    }
+    pollingRef.current = setInterval(async () => {
+      try {
+        const status = await textbookApi.getExtractionStatus()
+        const hasActiveExtraction = Object.values(status).some(
+          (s) => s.status === 'extracting'
+        )
+        const hasCompletedExtraction = Object.values(status).some(
+          (s) => s.status === 'completed'
+        )
+        if (hasActiveExtraction || hasCompletedExtraction) {
+          const graph = await knowledgeApi.getGraph()
+          setGraph(graph)
+          const kps = await knowledgeApi.getPoints()
+          setKnowledgePoints(kps)
+        }
+      } catch {}
+    }, 3000)
   }
 
   const renderContent = () => {

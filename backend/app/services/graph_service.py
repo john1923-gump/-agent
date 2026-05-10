@@ -13,11 +13,12 @@ knowledge_graph = KnowledgeGraph()
 _raw_relationships: list[dict] = []
 
 
-async def extract_and_build(chapters: list[Chapter]) -> list[KnowledgePoint]:
+async def extract_and_build(chapters: list[Chapter], progress_callback=None) -> list[KnowledgePoint]:
     """从章节列表中提取知识点并构建知识图谱。
 
     Args:
         chapters: 章节列表，每个章节包含标题和内容。
+        progress_callback: 可选的回调函数，用于更新进度。
 
     Returns:
         提取的知识点列表。
@@ -34,11 +35,15 @@ async def extract_and_build(chapters: list[Chapter]) -> list[KnowledgePoint]:
     else:
         selected_chapters = chapters
 
-    for ch in selected_chapters:
+    for i, ch in enumerate(selected_chapters):
         try:
             result = await llm_service.extract_knowledge_points(ch.content, ch.title)
             raw_list = result.get("knowledge_points", [])
             rels = result.get("relationships", [])
+            
+            # 更新进度
+            if progress_callback:
+                progress_callback(i + 1, len(selected_chapters))
         except Exception as e:
             logger.warning(f"章节 {ch.title} 知识提取失败，跳过: {e}")
             continue

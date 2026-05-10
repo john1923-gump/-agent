@@ -27,6 +27,10 @@ export const textbookApi = {
   delete: async (id: string) => {
     await api.delete(`/textbooks/${id}`)
   },
+  getExtractionStatus: async () => {
+    const { data } = await api.get('/textbooks/extraction-status')
+    return data as Record<string, { status: string; filename: string; progress?: number; total?: number; knowledge_points?: number; error?: string }>
+  },
 }
 
 export const knowledgeApi = {

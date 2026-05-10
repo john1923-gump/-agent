@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 80
     TOP_K: int = 5
 
-    MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
+    MAX_FILE_SIZE: int = 2 * 1024 * 1024 * 1024  # 2GB
     ALLOWED_EXTENSIONS: set[str] = {".pdf", ".docx", ".md", ".txt"}
 
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]

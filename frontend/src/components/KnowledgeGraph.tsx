@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as echarts from 'echarts'
 import { useAppStore } from '../stores/useAppStore'
-import { knowledgeApi } from '../services/api'
+import { knowledgeApi, textbookApi } from '../services/api'
 import type { GraphNode } from '../types'
-import { Search, ZoomIn, ZoomOut, Maximize2, RefreshCw } from 'lucide-react'
+import { Search, ZoomIn, ZoomOut, Maximize2, RefreshCw, Loader2 } from 'lucide-react'
 
 const TYPE_COLORS: Record<string, string> = {
   '概念': '#3b82f6',
@@ -49,10 +49,20 @@ export default function KnowledgeGraphView() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [colorMode, setColorMode] = useState<'type' | 'textbook'>('type')
   const [viewMode, setViewMode] = useState<ViewMode>('force')
+  const [isExtracting, setIsExtracting] = useState(false)
+  const [extractionProgress, setExtractionProgress] = useState(0)
+  const [extractionTotal, setExtractionTotal] = useState(0)
+  const pollingRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     loadGraph()
-    return () => { chartInstance.current?.dispose() }
+    startExtractionPolling()
+    return () => {
+      chartInstance.current?.dispose()
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -66,6 +76,36 @@ export default function KnowledgeGraphView() {
       const g = await knowledgeApi.getGraph()
       setGraph(g)
     } catch {}
+  }
+
+  const startExtractionPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+    }
+    pollingRef.current = setInterval(async () => {
+      try {
+        const status = await textbookApi.getExtractionStatus()
+        const extractingEntries = Object.values(status).filter(s => s.status === 'extracting')
+        const completedEntries = Object.values(status).filter(s => s.status === 'completed')
+        
+        if (extractingEntries.length > 0) {
+          setIsExtracting(true)
+          const totalProgress = extractingEntries.reduce((sum, s) => sum + (s.progress || 0), 0)
+          const totalCount = extractingEntries.reduce((sum, s) => sum + (s.total || 0), 0)
+          setExtractionProgress(totalProgress)
+          setExtractionTotal(totalCount)
+          
+          const g = await knowledgeApi.getGraph()
+          setGraph(g)
+        } else if (completedEntries.length > 0) {
+          setIsExtracting(false)
+          const g = await knowledgeApi.getGraph()
+          setGraph(g)
+        } else {
+          setIsExtracting(false)
+        }
+      } catch {}
+    }, 2000)
   }
 
   const renderSankeyChart = useCallback(() => {
@@ -213,9 +253,20 @@ export default function KnowledgeGraphView() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">知识图谱</h2>
-          <p className="text-sm text-gray-500">
-            {graph.nodes.length} 个节点 · {graph.edges.length} 条关系 · {viewMode === 'force' ? '支持拖拽/缩放/搜索' : '教材→类型分布'}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-gray-500">
+              {graph.nodes.length} 个节点 · {graph.edges.length} 条关系 · {viewMode === 'force' ? '支持拖拽/缩放/搜索' : '教材→类型分布'}
+            </p>
+            {isExtracting && (
+              <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>知识提取中...</span>
+                {extractionTotal > 0 && (
+                  <span>({Math.round((extractionProgress / extractionTotal) * 100)}%)</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-gray-100 rounded-lg p-1">
@@ -240,7 +291,7 @@ export default function KnowledgeGraphView() {
               </button>
             </div>
           )}
-          <button onClick={loadGraph} className="btn-secondary flex items-center gap-1 text-sm">
+          <button onClick={() => { loadGraph(); startExtractionPolling(); }} className="btn-secondary flex items-center gap-1 text-sm">
             <RefreshCw className="w-4 h-4" /> 刷新
           </button>
         </div>

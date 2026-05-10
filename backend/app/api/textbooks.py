@@ -13,15 +13,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/textbooks", tags=["textbooks"])
 
 textbooks_db: dict[str, TextbookMeta] = {}
+extraction_status: dict[str, dict] = {}
 
 
-async def _extract_knowledge_background(chapters, filename):
+async def _extract_knowledge_background(chapters, filename, textbook_id):
     """后台知识提取任务。"""
     try:
+        extraction_status[textbook_id] = {
+            "status": "extracting",
+            "filename": filename,
+            "progress": 0,
+            "total": len(chapters),
+            "knowledge_points": 0
+        }
+        
         kps = await graph_service.extract_and_build(chapters)
         kp_count = len(kps)
+        
+        extraction_status[textbook_id] = {
+            "status": "completed",
+            "filename": filename,
+            "progress": len(chapters),
+            "total": len(chapters),
+            "knowledge_points": kp_count
+        }
         logger.info(f"知识提取完成: {filename} -> {kp_count} 个知识点")
     except Exception as e:
+        extraction_status[textbook_id] = {
+            "status": "failed",
+            "filename": filename,
+            "error": str(e)
+        }
         logger.warning(f"知识提取失败（不影响上传）: {e}")
 
 
@@ -66,7 +88,7 @@ async def upload_textbook(file: UploadFile = File(...)):
 
     rag_service.add_textbook_chunks(textbook_id, file.filename, chapters)
 
-    asyncio.create_task(_extract_knowledge_background(chapters, file.filename))
+    asyncio.create_task(_extract_knowledge_background(chapters, file.filename, textbook_id))
 
     graph = graph_service.get_graph()
 
@@ -82,3 +104,18 @@ async def upload_textbook(file: UploadFile = File(...)):
 @router.get("/list")
 async def list_textbooks():
     return list(textbooks_db.values())
+
+
+@router.get("/extraction-status")
+async def get_extraction_status():
+    """获取所有教材的知识提取状态。"""
+    return extraction_status
+
+
+@router.get("/extraction-status/{textbook_id}")
+async def get_textbook_extraction_status(textbook_id: str):
+    """获取指定教材的知识提取状态。"""
+    status = extraction_status.get(textbook_id)
+    if not status:
+        return {"status": "not_found"}
+    return status
