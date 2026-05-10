@@ -19,22 +19,29 @@ extraction_status: dict[str, dict] = {}
 async def _extract_knowledge_background(chapters, filename, textbook_id):
     """后台知识提取任务。"""
     try:
+        # 限制章节数量，与graph_service保持一致
+        max_chapters = min(len(chapters), 20)
+        total_chapters = max_chapters if len(chapters) > max_chapters else len(chapters)
+        
         extraction_status[textbook_id] = {
             "status": "extracting",
             "filename": filename,
             "progress": 0,
-            "total": len(chapters),
+            "total": total_chapters,
             "knowledge_points": 0
         }
         
-        kps = await graph_service.extract_and_build(chapters)
+        def update_progress(current, total):
+            extraction_status[textbook_id]["progress"] = current
+        
+        kps = await graph_service.extract_and_build(chapters, progress_callback=update_progress)
         kp_count = len(kps)
         
         extraction_status[textbook_id] = {
             "status": "completed",
             "filename": filename,
-            "progress": len(chapters),
-            "total": len(chapters),
+            "progress": total_chapters,
+            "total": total_chapters,
             "knowledge_points": kp_count
         }
         logger.info(f"知识提取完成: {filename} -> {kp_count} 个知识点")
