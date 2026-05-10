@@ -6,10 +6,10 @@ import type { GraphNode } from '../types'
 import { Search, ZoomIn, ZoomOut, Maximize2, RefreshCw, Loader2 } from 'lucide-react'
 
 const TYPE_COLORS: Record<string, string> = {
-  '概念': '#3b82f6',
-  '定理': '#ef4444',
-  '方法': '#10b981',
-  '现象': '#f59e0b',
+  '概念': '#2563eb',
+  '定理': '#dc2626',
+  '方法': '#059669',
+  '现象': '#d97706',
 }
 
 const TYPE_SYMBOLS: Record<string, string> = {
@@ -19,7 +19,7 @@ const TYPE_SYMBOLS: Record<string, string> = {
   '现象': 'rect',
 }
 
-const TEXTBOOK_COLORS = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4']
+const TEXTBOOK_COLORS = ['#4f46e5', '#db2777', '#0d9488', '#ea580c', '#7c3aed', '#0891b2']
 
 const RELATION_LABELS: Record<string, string> = {
   'prerequisite': '前置',
@@ -66,7 +66,10 @@ export default function KnowledgeGraphView() {
   }, [])
 
   useEffect(() => {
-    if (chartRef.current && graph.nodes.length > 0) {
+    if (chartRef.current) {
+      if (!chartInstance.current) {
+        chartInstance.current = echarts.init(chartRef.current)
+      }
       renderChart()
     }
   }, [graph, colorMode, searchTerm, viewMode])
@@ -109,13 +112,28 @@ export default function KnowledgeGraphView() {
   }
 
   const renderSankeyChart = useCallback(() => {
-    if (!chartRef.current) return
-
-    if (!chartInstance.current) {
-      chartInstance.current = echarts.init(chartRef.current)
-    }
+    if (!chartRef.current || !chartInstance.current) return
 
     const chart = chartInstance.current
+
+    if (graph.nodes.length === 0) {
+      chart.clear()
+      chart.setOption({
+        graphic: {
+          type: 'text',
+          left: 'center',
+          top: 'center',
+          style: {
+            text: '暂无数据\n请先上传教材文件',
+            fontSize: 16,
+            fill: '#9ca3af',
+            textAlign: 'center',
+          },
+        },
+      })
+      return
+    }
+
     const textbookSet = [...new Set(graph.nodes.map(n => n.textbook_name))]
     const typeSet = Object.keys(TYPE_COLORS)
 
@@ -146,22 +164,45 @@ export default function KnowledgeGraphView() {
         nodeAlign: 'left',
         data: allNodes,
         links,
-        lineStyle: { color: 'gradient', curveness: 0.5 },
-        label: { fontSize: 12 },
-        nodeWidth: 20,
-        nodeGap: 12,
+        lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.6 },
+        label: {
+          fontSize: 13,
+          fontWeight: 'bold',
+          color: '#1f2937',
+        },
+        nodeWidth: 25,
+        nodeGap: 15,
+        itemStyle: {
+          borderWidth: 2,
+          borderColor: '#1f2937',
+        },
       }],
     }, true)
   }, [graph])
 
   const renderForceGraph = useCallback(() => {
-    if (!chartRef.current) return
-
-    if (!chartInstance.current) {
-      chartInstance.current = echarts.init(chartRef.current)
-    }
+    if (!chartRef.current || !chartInstance.current) return
 
     const chart = chartInstance.current
+
+    if (graph.nodes.length === 0) {
+      chart.clear()
+      chart.setOption({
+        graphic: {
+          type: 'text',
+          left: 'center',
+          top: 'center',
+          style: {
+            text: '暂无数据\n请先上传教材文件',
+            fontSize: 16,
+            fill: '#9ca3af',
+            textAlign: 'center',
+          },
+        },
+      })
+      return
+    }
+
     const filteredNodes = graph.nodes.filter(n =>
       !searchTerm || n.label.includes(searchTerm) || n.textbook_name.includes(searchTerm)
     )
@@ -174,16 +215,25 @@ export default function KnowledgeGraphView() {
     const nodes = filteredNodes.map(n => ({
       id: n.id,
       name: n.label,
-      symbolSize: n.size,
+      symbolSize: Math.max(35, n.size * 1.5),
       symbol: TYPE_SYMBOLS[n.type] || 'circle',
       category: colorMode === 'type' ? n.type : n.textbook_name,
       itemStyle: {
         color: colorMode === 'type' ? TYPE_COLORS[n.type] : textbookColorMap.get(n.textbook_name),
-        borderColor: '#fff',
-        borderWidth: 2,
-        opacity: Math.max(0.5, Math.min(1, n.confidence || 0.8)),
+        borderColor: '#1f2937',
+        borderWidth: 3,
+        opacity: Math.max(0.7, Math.min(1, n.confidence || 0.8)),
+        shadowBlur: 10,
+        shadowColor: 'rgba(0, 0, 0, 0.3)',
       },
-      label: { show: n.size > 15, fontSize: Math.max(10, n.size / 3) },
+      label: {
+        show: true,
+        fontSize: Math.max(12, n.size / 2.5),
+        fontWeight: 'bold',
+        color: '#1f2937',
+        textBorderColor: '#fff',
+        textBorderWidth: 2,
+      },
       tooltip: `<b>${n.label}</b><br/>类型：${n.type}<br/>教材：${n.textbook_name}<br/>章节：${n.chapter_title || '未知'}<br/>频次：${n.frequency}<br/>置信度：${((n.confidence || 0.8) * 100).toFixed(0)}%<br/>${n.description ? '描述：' + n.description : ''}`,
     }))
 
@@ -195,22 +245,28 @@ export default function KnowledgeGraphView() {
       source: e.source,
       target: e.target,
       lineStyle: {
-        width: Math.max(1, e.weight * 3),
-        curveness: 0.2,
-        color: RELATION_COLORS[e.relation] || '#ccc',
+        width: Math.max(2, e.weight * 4),
+        curveness: 0.25,
+        color: RELATION_COLORS[e.relation] || '#6b7280',
+        opacity: 0.8,
+        type: e.relation === '同章节' || e.relation === '同概念' ? 'dashed' : 'solid',
       },
       label: {
         show: true,
         formatter: RELATION_LABELS[e.relation] || e.relation,
-        fontSize: 10,
-        color: RELATION_COLORS[e.relation] || '#999',
+        fontSize: 11,
+        fontWeight: 'bold',
+        color: RELATION_COLORS[e.relation] || '#4b5563',
+        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+        padding: [2, 4],
+        borderRadius: 3,
       },
     }))
 
     chart.setOption({
       tooltip: { trigger: 'item', formatter: (p: any) => p.data?.tooltip || '' },
-      legend: { data: categories.map(c => c.name), top: 10, textStyle: { fontSize: 12 } },
-      animationDuration: 500,
+      legend: { data: categories.map(c => c.name), top: 10, textStyle: { fontSize: 13, fontWeight: 'bold' } },
+      animationDuration: 800,
       series: [{
         type: 'graph',
         layout: 'force',
@@ -219,9 +275,18 @@ export default function KnowledgeGraphView() {
         categories,
         roam: true,
         draggable: true,
-        force: { repulsion: 300, gravity: 0.1, edgeLength: [80, 200], layoutAnimation: true },
-        emphasis: { focus: 'adjacency', lineStyle: { width: 4 } },
-        lineStyle: { color: '#ccc', opacity: 0.6 },
+        force: {
+          repulsion: 400,
+          gravity: 0.15,
+          edgeLength: [100, 250],
+          layoutAnimation: true,
+        },
+        emphasis: {
+          focus: 'adjacency',
+          lineStyle: { width: 6 },
+          itemStyle: { borderWidth: 5, shadowBlur: 20 },
+        },
+        lineStyle: { color: '#9ca3af', opacity: 0.7 },
       }],
     }, true)
 
@@ -378,14 +443,6 @@ export default function KnowledgeGraphView() {
         )}
       </div>
 
-      {graph.nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="text-center text-gray-400">
-            <p className="text-lg">暂无知识图谱数据</p>
-            <p className="text-sm mt-1">请先上传教材文件</p>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
