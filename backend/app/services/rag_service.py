@@ -5,14 +5,20 @@ import numpy as np
 from ..models.schemas import Chunk, QAReference
 from ..config import settings
 from ..utils.text_utils import gen_id, split_chunks
+from . import embedding_service
 
 logger = logging.getLogger(__name__)
 
 _chunks_db: dict[str, Chunk] = {}
 _chunk_id_list: list[str] = []
 _tfidf_matrix: np.ndarray | None = None
+_embedding_matrix: np.ndarray | None = None
 _vocab: dict[str, int] = {}
 _idf: np.ndarray | None = None
+
+USE_HYBRID_RETRIEVAL = True
+BM25_WEIGHT = 0.5
+EMBED_WEIGHT = 0.5
 
 
 def _char_ngrams(text: str, n: int = 2) -> list[str]:
@@ -77,7 +83,35 @@ def _build_tfidf_index():
     norms[norms == 0] = 1.0
     _tfidf_matrix = matrix / norms
 
-    logger.info(f"RAG索引构建完成: {n_docs}个文档块, {vocab_size}维特征")
+    logger.info(f"TF-IDF索引构建完成: {n_docs}个文档块, {vocab_size}维特征")
+
+
+def _build_embedding_index():
+    global _embedding_matrix
+
+    if not _chunk_id_list:
+        _embedding_matrix = None
+        return
+
+    texts = [_chunks_db[cid].content for cid in _chunk_id_list]
+
+    try:
+        embeddings = embedding_service.encode_texts(texts, dim=128)
+
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        _embedding_matrix = embeddings / norms
+
+        logger.info(f"Embedding索引构建完成: {len(texts)}个文档块, 128维特征")
+    except Exception as e:
+        logger.warning(f"Embedding索引构建失败: {e}")
+        _embedding_matrix = None
+
+
+def _build_index():
+    _build_tfidf_index()
+    if USE_HYBRID_RETRIEVAL:
+        _build_embedding_index()
 
 
 def add_textbook_chunks(textbook_id: str, textbook_name: str, chapters: list):
@@ -102,11 +136,11 @@ def add_textbook_chunks(textbook_id: str, textbook_name: str, chapters: list):
         _chunks_db[chunk.id] = chunk
         _chunk_id_list.append(chunk.id)
 
-    _build_tfidf_index()
+    _build_index()
     logger.info(f"已添加 {len(new_chunks)} 个文档块 (来自 {textbook_name})")
 
 
-def retrieve(question: str, top_k: int = 5, textbook_filter: str | None = None) -> list[tuple[Chunk, float]]:
+def _retrieve_bm25(question: str, top_k: int = 5, textbook_filter: str | None = None) -> list[tuple[str, float]]:
     if _tfidf_matrix is None or _vocab is None or _idf is None:
         return []
 
@@ -118,9 +152,8 @@ def retrieve(question: str, top_k: int = 5, textbook_filter: str | None = None) 
 
     sims = _tfidf_matrix @ q_vec
 
-    indices = np.argsort(sims)[::-1]
     results = []
-    for idx in indices:
+    for idx in np.argsort(sims)[::-1]:
         if idx < 0 or idx >= len(_chunk_id_list):
             continue
         score = float(sims[idx])
@@ -132,10 +165,91 @@ def retrieve(question: str, top_k: int = 5, textbook_filter: str | None = None) 
             continue
         if textbook_filter and chunk.textbook_id != textbook_filter:
             continue
-        results.append((chunk, score))
-        if len(results) >= top_k:
+        results.append((chunk_id, score))
+        if len(results) >= top_k * 2:
             break
     return results
+
+
+def _retrieve_embedding(question: str, top_k: int = 5, textbook_filter: str | None = None) -> list[tuple[str, float]]:
+    if _embedding_matrix is None:
+        return []
+
+    try:
+        q_vec = embedding_service.encode_single(question, dim=128)
+        q_norm = np.linalg.norm(q_vec)
+        if q_norm == 0:
+            return []
+        q_vec = q_vec / q_norm
+
+        sims = (_embedding_matrix @ q_vec.T).flatten()
+
+        results = []
+        for idx in np.argsort(sims)[::-1]:
+            if idx < 0 or idx >= len(_chunk_id_list):
+                continue
+            score = float(sims[idx])
+            if score < 0.01:
+                break
+            chunk_id = _chunk_id_list[idx]
+            chunk = _chunks_db.get(chunk_id)
+            if chunk is None:
+                continue
+            if textbook_filter and chunk.textbook_id != textbook_filter:
+                continue
+            results.append((chunk_id, score))
+            if len(results) >= top_k * 2:
+                break
+        return results
+    except Exception as e:
+        logger.warning(f"Embedding检索失败: {e}")
+        return []
+
+
+def _fuse_results(
+    bm25_results: list[tuple[str, float]],
+    embed_results: list[tuple[str, float]],
+    top_k: int,
+) -> list[tuple[str, float]]:
+    scores: dict[str, float] = {}
+
+    if bm25_results:
+        max_bm25 = max(s for _, s in bm25_results) if bm25_results else 1.0
+        max_bm25 = max(max_bm25, 0.001)
+        for chunk_id, score in bm25_results:
+            normalized = score / max_bm25
+            scores[chunk_id] = scores.get(chunk_id, 0) + BM25_WEIGHT * normalized
+
+    if embed_results:
+        max_embed = max(s for _, s in embed_results) if embed_results else 1.0
+        max_embed = max(max_embed, 0.001)
+        for chunk_id, score in embed_results:
+            normalized = score / max_embed
+            scores[chunk_id] = scores.get(chunk_id, 0) + EMBED_WEIGHT * normalized
+
+    sorted_results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return sorted_results[:top_k]
+
+
+def retrieve(question: str, top_k: int = 5, textbook_filter: str | None = None) -> list[tuple[Chunk, float]]:
+    if USE_HYBRID_RETRIEVAL and _embedding_matrix is not None:
+        bm25_results = _retrieve_bm25(question, top_k, textbook_filter)
+        embed_results = _retrieve_embedding(question, top_k, textbook_filter)
+        fused = _fuse_results(bm25_results, embed_results, top_k)
+        results = []
+        for chunk_id, score in fused:
+            chunk = _chunks_db.get(chunk_id)
+            if chunk:
+                results.append((chunk, score))
+        return results
+    else:
+        bm25_results = _retrieve_bm25(question, top_k, textbook_filter)
+        results = []
+        for chunk_id, score in bm25_results:
+            chunk = _chunks_db.get(chunk_id)
+            if chunk:
+                results.append((chunk, score))
+        return results
 
 
 def get_all_chunks() -> list[Chunk]:
@@ -150,9 +264,21 @@ def get_chunk_count() -> int:
     return len(_chunks_db)
 
 
+def get_index_stats() -> dict:
+    return {
+        "total_chunks": len(_chunks_db),
+        "tfidf_enabled": _tfidf_matrix is not None,
+        "embedding_enabled": _embedding_matrix is not None,
+        "hybrid_retrieval": USE_HYBRID_RETRIEVAL,
+        "bm25_weight": BM25_WEIGHT,
+        "embed_weight": EMBED_WEIGHT,
+    }
+
+
 def clear_all():
-    global _tfidf_matrix, _chunks_db, _chunk_id_list, _vocab, _idf
+    global _tfidf_matrix, _embedding_matrix, _chunks_db, _chunk_id_list, _vocab, _idf
     _tfidf_matrix = None
+    _embedding_matrix = None
     _chunks_db = {}
     _chunk_id_list = []
     _vocab = {}

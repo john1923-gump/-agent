@@ -27,6 +27,7 @@ export interface KnowledgePoint {
   name: string
   description: string
   type: KnowledgeType
+  confidence: number
   page: number
 }
 
@@ -40,6 +41,7 @@ export interface GraphNode {
   description: string
   frequency: number
   size: number
+  confidence: number
 }
 
 export interface GraphEdge {
@@ -64,6 +66,7 @@ export interface QAReference {
 export interface QAResponse {
   answer: string
   references: QAReference[]
+  confidence: number
 }
 
 export interface ChatMessage {
@@ -75,7 +78,7 @@ export interface IntegrationPair {
   kp_a: KnowledgePoint
   kp_b: KnowledgePoint
   similarity: number
-  decision: 'merge' | 'keep' | 'remove'
+  decision: 'merge' | 'keep' | 'remove' | 'enrich'
   reason: string
   merged_content?: string
 }
@@ -136,4 +139,13 @@ export interface ArenaSession {
   max_streak: number
   weak_points: string[]
   finished: boolean
+}
+
+export interface RagStats {
+  total_chunks: number
+  tfidf_enabled: boolean
+  embedding_enabled: boolean
+  hybrid_retrieval: boolean
+  bm25_weight: number
+  embed_weight: number
 }

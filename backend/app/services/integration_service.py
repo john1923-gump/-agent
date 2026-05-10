@@ -5,7 +5,7 @@ from ..models.schemas import (
     KnowledgePoint, IntegrationPair, IntegrationResult, IntegrationDecision
 )
 from ..utils.text_utils import gen_id
-from . import llm_service
+from . import llm_service, embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,24 @@ def _char_ngram_similarity(a: str, b: str, n: int = 2) -> float:
     inter = len(grams_a & grams_b)
     union = len(grams_a | grams_b)
     return inter / union if union > 0 else 0.0
+
+
+def _embedding_similarity(a: str, b: str) -> float:
+    try:
+        from .embedding_service import encode_single, cosine_similarity
+        vec_a = encode_single(a)
+        vec_b = encode_single(b)
+        return cosine_similarity(vec_a, vec_b)
+    except Exception as e:
+        logger.warning(f"Embedding相似度计算失败，回退到字符相似度: {e}")
+        return _char_ngram_similarity(a, b)
+
+
+def _combined_similarity(a: str, b: str, desc_a: str, desc_b: str) -> tuple[float, float, float]:
+    name_sim = _char_ngram_similarity(a, b, 2)
+    desc_sim = _char_ngram_similarity(desc_a[:100], desc_b[:100], 2)
+    embed_sim = _embedding_similarity(f"{a} {desc_a[:50]}", f"{b} {desc_b[:50]}")
+    return name_sim, desc_sim, embed_sim
 
 
 def _text_chars(kps: list[KnowledgePoint]) -> int:
@@ -70,17 +88,23 @@ async def integrate_cross_textbooks(
 async def _layer1_semantic_dedup(
     all_kps: list[KnowledgePoint],
 ) -> list[IntegrationPair]:
-    cross_pairs: list[tuple[KnowledgePoint, KnowledgePoint, float]] = []
+    cross_pairs: list[tuple[KnowledgePoint, KnowledgePoint, float, float]] = []
+
     for i in range(len(all_kps)):
         for j in range(i + 1, len(all_kps)):
             a, b = all_kps[i], all_kps[j]
             if a.textbook_id == b.textbook_id:
                 continue
-            name_sim = _char_ngram_similarity(a.name, b.name, 2)
-            desc_sim = _char_ngram_similarity(a.description[:100], b.description[:100], 2)
-            combined = name_sim * 0.6 + desc_sim * 0.4
-            if combined > 0.35:
-                cross_pairs.append((a, b, combined))
+
+            name_sim, desc_sim, embed_sim = _combined_similarity(
+                a.name, b.name, a.description, b.description
+            )
+
+            char_combined = name_sim * 0.6 + desc_sim * 0.4
+            final_combined = char_combined * 0.4 + embed_sim * 0.6
+
+            if embed_sim >= 0.5 or (char_combined >= 0.35 and embed_sim >= 0.3):
+                cross_pairs.append((a, b, final_combined, embed_sim))
 
     cross_pairs.sort(key=lambda x: x[2], reverse=True)
     top_pairs = cross_pairs[:30]
@@ -94,9 +118,9 @@ async def _layer1_semantic_dedup(
     for batch_start in range(0, len(top_pairs), batch_size):
         batch = top_pairs[batch_start:batch_start + batch_size]
         pairs_text = ""
-        for idx, (a, b, sim) in enumerate(batch):
+        for idx, (a, b, sim, emb_sim) in enumerate(batch):
             pairs_text += f"""
-知识点对{idx+1}（相似度{sim:.2f}）：
+知识点对{idx+1}（字符相似度{sim:.2f}，语义相似度{emb_sim:.2f}）：
   A（《{a.textbook_name}》{a.chapter_title}）：{a.name} - {a.description}
   B（《{b.textbook_name}》{b.chapter_title}）：{b.name} - {b.description}
 """
@@ -119,7 +143,7 @@ async def _layer1_semantic_dedup(
             if not isinstance(parsed, list):
                 parsed = [parsed]
 
-            for idx, (a, b, sim) in enumerate(batch):
+            for idx, (a, b, sim, emb_sim) in enumerate(batch):
                 if idx < len(parsed):
                     item = parsed[idx]
                     decision = IntegrationDecision(item.get("decision", "keep"))
@@ -137,7 +161,7 @@ async def _layer1_semantic_dedup(
                     ))
         except Exception as e:
             logger.warning(f"整合决策批次失败: {e}")
-            for a, b, sim in batch:
+            for a, b, sim, emb_sim in batch:
                 all_decisions.append(IntegrationPair(
                     kp_a=a, kp_b=b, similarity=round(sim, 3),
                     decision=IntegrationDecision.KEEP,

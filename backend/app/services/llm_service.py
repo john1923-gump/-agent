@@ -41,6 +41,19 @@ async def chat_stream(messages: list[dict], model: str | None = None, temperatur
             yield delta
 
 
+EXTRACTION_EXAMPLES = """示例1（概念类型）：
+{"name": "细胞膜", "description": "细胞的外层膜结构，由磷脂双分子层和蛋白质组成，具有流动性和选择透过性", "type": "概念", "confidence": 0.95}
+
+示例2（定理类型）：
+{"name": "牛顿第二定律", "description": "物体加速度的大小与作用力成正比，与物体质量成反比，F=ma", "type": "定理", "confidence": 0.98}
+
+示例3（方法类型）：
+{"name": "差速离心法", "description": "利用不同离心速度分离细胞器的方法，依次在不同转速下离心分离大小不同的颗粒", "type": "方法", "confidence": 0.88}
+
+示例4（现象类型）：
+{"name": "渗透作用", "description": "水分子通过半透膜从低浓度溶液向高浓度溶液扩散的现象", "type": "现象", "confidence": 0.92}"""
+
+
 async def extract_knowledge_points(chapter_content: str, chapter_title: str) -> dict:
     prompt = f"""你是学科知识提取专家。请从以下教材章节中提取所有知识点及其关系。
 
@@ -52,16 +65,19 @@ async def extract_knowledge_points(chapter_content: str, chapter_title: str) -> 
 请以JSON格式返回，包含两个字段：
 1. knowledge_points: 知识点数组，每个包含：
    - name: 知识点名称
-   - description: 知识点描述（1-2句话）
+   - description: 知识点描述（1-2句话，50-150字）
    - type: 类型（必须是"概念"、"定理"、"方法"或"现象"之一）
+   - confidence: 置信度分数（0-1之间，表示对该知识点提取的把握程度）
 2. relationships: 关系数组，每个包含：
    - source: 源知识点名称
    - target: 目标知识点名称
    - relation: 关系类型（必须是"prerequisite"、"parallel"、"contains"、"applies_to"之一）
    - description: 关系简述
 
-只返回JSON，不要其他文字。示例：
-{{"knowledge_points":[{{"name":"细胞膜","description":"细胞的外层膜结构","type":"概念"}}],"relationships":[{{"source":"磷脂双分子层","target":"细胞膜","relation":"contains","description":"组成关系"}}]}}"""
+知识点提取示例：
+{EXTRACTION_EXAMPLES}
+
+只返回JSON，不要其他文字。"""
 
     try:
         result = await chat([{"role": "user", "content": prompt}], temperature=0.1)
@@ -70,7 +86,14 @@ async def extract_knowledge_points(chapter_content: str, chapter_title: str) -> 
             result = result.split("```")[1]
             if result.startswith("json"):
                 result = result[4:]
-        return json.loads(result)
+        parsed = json.loads(result)
+
+        for kp in parsed.get("knowledge_points", []):
+            if "confidence" not in kp:
+                kp["confidence"] = 0.8
+            kp["confidence"] = max(0.0, min(1.0, float(kp.get("confidence", 0.8))))
+
+        return parsed
     except Exception as e:
         logger.warning(f"知识提取失败: {e}")
         return {"knowledge_points": [], "relationships": []}
