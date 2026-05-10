@@ -4,18 +4,21 @@ import type {
   QAResponse, ChatMessage, ArenaSession, ArenaQuestion, ArenaRound, ArenaOpponent,
 } from '../types'
 
-const api = axios.create({ baseURL: '/api' })
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 300000, // 5分钟超时
+})
 
 export const textbookApi = {
   upload: async (file: File) => {
     const form = new FormData()
     form.append('file', file)
     const { data } = await api.post('/textbooks/upload', form)
-    return data as { textbook: TextbookMeta; chapters_count: number; knowledge_points_count: number }
+    return data as { textbook: TextbookMeta; chapter_count: number; knowledge_points: number; graph_nodes: number; graph_edges: number }
   },
   list: async () => {
     const { data } = await api.get('/textbooks/list')
-    return data as { meta: TextbookMeta }[]
+    return data as TextbookMeta[]
   },
   get: async (id: string) => {
     const { data } = await api.get(`/textbooks/${id}`)

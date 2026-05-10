@@ -25,10 +25,23 @@ async def extract_and_build(chapters: list[Chapter]) -> list[KnowledgePoint]:
     all_kps: list[KnowledgePoint] = []
     all_rels: list[dict] = []
 
-    for ch in chapters:
-        result = await llm_service.extract_knowledge_points(ch.content, ch.title)
-        raw_list = result.get("knowledge_points", [])
-        rels = result.get("relationships", [])
+    # 限制章节数量，避免API调用过多
+    max_chapters = min(len(chapters), 20)
+    if len(chapters) > max_chapters:
+        # 选择有代表性的章节（均匀采样）
+        step = len(chapters) // max_chapters
+        selected_chapters = [chapters[i * step] for i in range(max_chapters)]
+    else:
+        selected_chapters = chapters
+
+    for ch in selected_chapters:
+        try:
+            result = await llm_service.extract_knowledge_points(ch.content, ch.title)
+            raw_list = result.get("knowledge_points", [])
+            rels = result.get("relationships", [])
+        except Exception as e:
+            logger.warning(f"章节 {ch.title} 知识提取失败，跳过: {e}")
+            continue
 
         for raw in raw_list:
             kp_type = KnowledgeType.CONCEPT

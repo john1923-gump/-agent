@@ -101,10 +101,10 @@ async def generate_question(session: ArenaSession, textbook_filter: str | None =
 
 
 async def play_round(session: ArenaSession, answer: str) -> ArenaRound:
-    if not session.rounds or session._last_question is None:
+    if not session.rounds or session.last_question is None:
         question = await generate_question(session)
     else:
-        question = session._last_question
+        question = session.last_question
 
     difficulty = question.difficulty
 
@@ -171,13 +171,13 @@ async def play_round(session: ArenaSession, answer: str) -> ArenaRound:
     if session.current_round >= 8:
         session.finished = True
 
-    session._last_question = None
+    session.last_question = None
     return arena_round
 
 
 async def prepare_round(session: ArenaSession, textbook_filter: str | None = None) -> ArenaQuestion:
     question = await generate_question(session, textbook_filter)
-    session._last_question = question
+    session.last_question = question
     return question
 
 

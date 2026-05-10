@@ -1,9 +1,15 @@
 import uuid
 import re
+import hashlib
 
 
 def gen_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def calc_checksum(data: bytes) -> str:
+    """计算数据的MD5校验和。"""
+    return hashlib.md5(data).hexdigest()[:16]
 
 
 def clean_text(text: str) -> str:

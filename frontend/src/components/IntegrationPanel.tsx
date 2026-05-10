@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { GitMerge, ArrowRight, Check, X, BarChart3, Shield, BookOpen } from 'lucide-react'
+import { GitMerge, ArrowRight, Check, X, BarChart3, Shield, BookOpen, Sparkles } from 'lucide-react'
 import { knowledgeApi } from '../services/api'
 import { useAppStore } from '../stores/useAppStore'
 import type { IntegrationResult, IntegrationPair } from '../types'
@@ -9,6 +9,7 @@ const DECISION_LABELS = {
   merge: { label: '合并', color: 'bg-blue-100 text-blue-700', icon: GitMerge },
   keep: { label: '保留', color: 'bg-green-100 text-green-700', icon: Check },
   remove: { label: '移除', color: 'bg-red-100 text-red-700', icon: X },
+  enrich: { label: '丰富', color: 'bg-purple-100 text-purple-700', icon: Sparkles },
 }
 
 export default function IntegrationPanel() {

@@ -20,7 +20,7 @@ export default function FileUploader({ onUploaded }: Props) {
     for (const file of Array.from(files)) {
       try {
         const result = await textbookApi.upload(file)
-        toast.success(`${file.name} 上传成功，${result.chapters_count}个章节，${result.knowledge_points_count}个知识点`)
+        toast.success(`${file.name} 上传成功，${result.chapter_count}个章节，${result.knowledge_points}个知识点`)
       } catch (e: any) {
         const detail = e.response?.data?.detail || e.message
         toast.error(`${file.name} 上传失败: ${detail}`)

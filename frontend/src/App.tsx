@@ -19,7 +19,7 @@ export default function App() {
   const loadData = async () => {
     try {
       const tbs = await textbookApi.list()
-      setTextbooks(tbs.map(t => t.meta))
+      setTextbooks(tbs)
       const graph = await knowledgeApi.getGraph()
       setGraph(graph)
       const kps = await knowledgeApi.getPoints()
