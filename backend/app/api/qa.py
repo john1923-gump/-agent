@@ -1,10 +1,34 @@
+"""问答API：RAG问答 + 教师对话。"""
 import json
+import re
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from ..models.schemas import QARequest, QAResponse, QAReference, TeacherChatRequest, TeacherChatResponse
 from ..services import rag_service, llm_service, graph_service
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
+
+SYSTEM_PROMPT_WITH_CONTEXT = """你是一个学科知识助手。你的任务是根据提供的教材内容回答问题。
+
+【核心原则】
+1. 严格基于提供的参考资料回答，不得编造或推测未提及的信息
+2. 如果参考资料不足以完整回答问题，必须明确说明哪些部分有据可查、哪些是你的推测
+3. 如果完全无法从资料中找到答案，直接回答"根据现有教材资料无法回答此问题"
+4. 所有引用必须标注来源，格式：[来源:《教材名》章节]
+
+【防幻觉策略】
+- 仅使用参考资料中的信息，不依赖外部知识
+- 对于不确定的内容，使用"可能"、"推测"等限定词
+- 不要添加参考资料中没有的细节或例子"""
+
+SYSTEM_PROMPT_NO_CONTEXT = """你是一个学科知识助手。当前知识库中没有找到与问题相关的教材内容。
+
+请如实告知用户这一情况，并建议他们：
+1. 先上传相关教材
+2. 检查问题是否与已上传教材内容相关
+3. 尝试使用不同的关键词提问
+
+不要编造任何知识库中不存在的信息。"""
 
 
 @router.post("/ask")
@@ -25,16 +49,16 @@ async def ask_question(req: QARequest):
 
         if context_parts:
             context = "\n\n---\n\n".join(context_parts)
-            system_prompt = "你是一个学科知识助手。严格根据提供的教材内容回答问题，必须在回答中引用来源（如[来源:《教材名》章节]）。如果参考资料不足以完整回答问题，请明确说明哪些部分有据可查、哪些是推测。"
             user_prompt = f"参考资料：\n{context}\n\n问题：{req.question}\n\n请用中文回答，回答中必须标注引用来源。"
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT_WITH_CONTEXT},
+                {"role": "user", "content": user_prompt},
+            ]
         else:
-            system_prompt = "你是一个学科知识助手。当前知识库中没有找到与问题相关的教材内容，请如实告知用户，并建议他们先上传相关教材。"
-            user_prompt = f"问题：{req.question}"
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT_NO_CONTEXT},
+                {"role": "user", "content": f"问题：{req.question}"},
+            ]
 
         answer = await llm_service.chat(messages)
         return QAResponse(answer=answer, references=references).model_dump()
@@ -70,16 +94,17 @@ async def ask_question_stream(req: QARequest):
 
         if context_parts:
             context = "\n\n---\n\n".join(context_parts)
-            system_prompt = "你是一个学科知识助手。严格根据提供的教材内容回答问题，必须在回答中引用来源（如[来源:《教材名》章节]）。如果参考资料不足以完整回答问题，请明确说明哪些部分有据可查、哪些是推测。"
             user_prompt = f"参考资料：\n{context}\n\n问题：{req.question}\n\n请用中文回答，回答中必须标注引用来源。"
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT_WITH_CONTEXT},
+                {"role": "user", "content": user_prompt},
+            ]
         else:
-            system_prompt = "你是一个学科知识助手。当前知识库中没有找到与问题相关的教材内容，请如实告知用户，并建议他们先上传相关教材。"
-            user_prompt = f"问题：{req.question}"
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT_NO_CONTEXT},
+                {"role": "user", "content": f"问题：{req.question}"},
+            ]
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
         async for token in llm_service.chat_stream(messages):
             yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
@@ -119,7 +144,6 @@ async def teacher_chat(req: TeacherChatRequest):
 
     graph_updated = False
 
-    import re
     actions = re.findall(r'\[ACTION:(\w+)(?::([^\]]+))?\]', reply)
     for action_type, params in actions:
         if action_type == "UPDATE_KP" and params:

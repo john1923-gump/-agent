@@ -12,6 +12,13 @@ const TYPE_COLORS: Record<string, string> = {
   '现象': '#f59e0b',
 }
 
+const TYPE_SYMBOLS: Record<string, string> = {
+  '概念': 'circle',
+  '定理': 'diamond',
+  '方法': 'triangle',
+  '现象': 'rect',
+}
+
 const TEXTBOOK_COLORS = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4']
 
 const RELATION_LABELS: Record<string, string> = {
@@ -32,6 +39,8 @@ const RELATION_COLORS: Record<string, string> = {
   '同概念': '#8b5cf6',
 }
 
+type ViewMode = 'force' | 'sankey'
+
 export default function KnowledgeGraphView() {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartInstance = useRef<echarts.ECharts | null>(null)
@@ -39,6 +48,7 @@ export default function KnowledgeGraphView() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [colorMode, setColorMode] = useState<'type' | 'textbook'>('type')
+  const [viewMode, setViewMode] = useState<ViewMode>('force')
 
   useEffect(() => {
     loadGraph()
@@ -49,7 +59,7 @@ export default function KnowledgeGraphView() {
     if (chartRef.current && graph.nodes.length > 0) {
       renderChart()
     }
-  }, [graph, colorMode, searchTerm])
+  }, [graph, colorMode, searchTerm, viewMode])
 
   const loadGraph = async () => {
     try {
@@ -58,7 +68,53 @@ export default function KnowledgeGraphView() {
     } catch {}
   }
 
-  const renderChart = useCallback(() => {
+  const renderSankeyChart = useCallback(() => {
+    if (!chartRef.current) return
+
+    if (!chartInstance.current) {
+      chartInstance.current = echarts.init(chartRef.current)
+    }
+
+    const chart = chartInstance.current
+    const textbookSet = [...new Set(graph.nodes.map(n => n.textbook_name))]
+    const typeSet = Object.keys(TYPE_COLORS)
+
+    const links: { source: string; target: string; value: number }[] = []
+    const nodeMap = new Map<string, number>()
+
+    for (const n of graph.nodes) {
+      const key = `${n.textbook_name}|||${n.type}`
+      nodeMap.set(key, (nodeMap.get(key) || 0) + n.frequency)
+    }
+
+    nodeMap.forEach((value, key) => {
+      const [textbook, type] = key.split('|||')
+      links.push({ source: textbook, target: type, value })
+    })
+
+    const allNodes = [
+      ...textbookSet.map(t => ({ name: t, itemStyle: { color: TEXTBOOK_COLORS[textbookSet.indexOf(t) % TEXTBOOK_COLORS.length] } })),
+      ...typeSet.map(t => ({ name: t, itemStyle: { color: TYPE_COLORS[t] } })),
+    ]
+
+    chart.setOption({
+      tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+      series: [{
+        type: 'sankey',
+        layout: 'none',
+        emphasis: { focus: 'adjacency' },
+        nodeAlign: 'left',
+        data: allNodes,
+        links,
+        lineStyle: { color: 'gradient', curveness: 0.5 },
+        label: { fontSize: 12 },
+        nodeWidth: 20,
+        nodeGap: 12,
+      }],
+    }, true)
+  }, [graph])
+
+  const renderForceGraph = useCallback(() => {
     if (!chartRef.current) return
 
     if (!chartInstance.current) {
@@ -79,14 +135,16 @@ export default function KnowledgeGraphView() {
       id: n.id,
       name: n.label,
       symbolSize: n.size,
+      symbol: TYPE_SYMBOLS[n.type] || 'circle',
       category: colorMode === 'type' ? n.type : n.textbook_name,
       itemStyle: {
         color: colorMode === 'type' ? TYPE_COLORS[n.type] : textbookColorMap.get(n.textbook_name),
         borderColor: '#fff',
         borderWidth: 2,
+        opacity: Math.max(0.5, Math.min(1, n.confidence || 0.8)),
       },
       label: { show: n.size > 15, fontSize: Math.max(10, n.size / 3) },
-      tooltip: `<b>${n.label}</b><br/>类型：${n.type}<br/>教材：${n.textbook_name}<br/>章节：${n.chapter_title || '未知'}<br/>频次：${n.frequency}<br/>${n.description ? '描述：' + n.description : ''}`,
+      tooltip: `<b>${n.label}</b><br/>类型：${n.type}<br/>教材：${n.textbook_name}<br/>章节：${n.chapter_title || '未知'}<br/>频次：${n.frequency}<br/>置信度：${((n.confidence || 0.8) * 100).toFixed(0)}%<br/>${n.description ? '描述：' + n.description : ''}`,
     }))
 
     const categories = colorMode === 'type'
@@ -136,8 +194,18 @@ export default function KnowledgeGraphView() {
     })
   }, [graph, colorMode, searchTerm])
 
+  const renderChart = useCallback(() => {
+    if (viewMode === 'sankey') {
+      renderSankeyChart()
+    } else {
+      renderForceGraph()
+    }
+  }, [viewMode, renderSankeyChart, renderForceGraph])
+
   const handleZoom = (factor: number) => {
-    chartInstance.current?.dispatchAction({ type: 'graphRoam', zoom: factor })
+    if (viewMode === 'force') {
+      chartInstance.current?.dispatchAction({ type: 'graphRoam', zoom: factor })
+    }
   }
 
   return (
@@ -146,43 +214,57 @@ export default function KnowledgeGraphView() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">知识图谱</h2>
           <p className="text-sm text-gray-500">
-            {graph.nodes.length} 个节点 · {graph.edges.length} 条关系 · 支持拖拽/缩放/搜索
+            {graph.nodes.length} 个节点 · {graph.edges.length} 条关系 · {viewMode === 'force' ? '支持拖拽/缩放/搜索' : '教材→类型分布'}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-gray-100 rounded-lg p-1">
-            <button onClick={() => setColorMode('type')}
-              className={`px-3 py-1 text-xs rounded-md transition-colors ${colorMode === 'type' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
-              按类型
+            <button onClick={() => setViewMode('force')}
+              className={`px-3 py-1 text-xs rounded-md transition-colors ${viewMode === 'force' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
+              力导向图
             </button>
-            <button onClick={() => setColorMode('textbook')}
-              className={`px-3 py-1 text-xs rounded-md transition-colors ${colorMode === 'textbook' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
-              按教材
+            <button onClick={() => setViewMode('sankey')}
+              className={`px-3 py-1 text-xs rounded-md transition-colors ${viewMode === 'sankey' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
+              桑基图
             </button>
           </div>
+          {viewMode === 'force' && (
+            <div className="flex items-center bg-gray-100 rounded-lg p-1">
+              <button onClick={() => setColorMode('type')}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${colorMode === 'type' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
+                按类型
+              </button>
+              <button onClick={() => setColorMode('textbook')}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${colorMode === 'textbook' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-500'}`}>
+                按教材
+              </button>
+            </div>
+          )}
           <button onClick={loadGraph} className="btn-secondary flex items-center gap-1 text-sm">
             <RefreshCw className="w-4 h-4" /> 刷新
           </button>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="搜索知识点或教材..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            className="input-field pl-10"
-          />
+      {viewMode === 'force' && (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="搜索知识点或教材..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="input-field pl-10"
+            />
+          </div>
+          <button onClick={() => handleZoom(1.2)} className="btn-secondary p-2"><ZoomIn className="w-4 h-4" /></button>
+          <button onClick={() => handleZoom(0.8)} className="btn-secondary p-2"><ZoomOut className="w-4 h-4" /></button>
+          <button onClick={() => { chartInstance.current?.resize(); handleZoom(1) }} className="btn-secondary p-2">
+            <Maximize2 className="w-4 h-4" />
+          </button>
         </div>
-        <button onClick={() => handleZoom(1.2)} className="btn-secondary p-2"><ZoomIn className="w-4 h-4" /></button>
-        <button onClick={() => handleZoom(0.8)} className="btn-secondary p-2"><ZoomOut className="w-4 h-4" /></button>
-        <button onClick={() => { chartInstance.current?.resize(); handleZoom(1) }} className="btn-secondary p-2">
-          <Maximize2 className="w-4 h-4" />
-        </button>
-      </div>
+      )}
 
       <div className="flex-1 flex gap-4 min-h-0">
         <div ref={chartRef} className="flex-1 bg-white rounded-xl border border-gray-200 shadow-sm" />

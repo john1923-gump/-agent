@@ -1,3 +1,4 @@
+"""跨教材整合服务：三层数压缩策略（语义去重→冗余简化→内容筛选）。"""
 import json
 import logging
 from collections import defaultdict
@@ -11,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 def _char_ngram_similarity(a: str, b: str, n: int = 2) -> float:
+    """计算两个字符串的字符n-gram Jaccard相似度。
+
+    Args:
+        a: 第一个字符串。
+        b: 第二个字符串。
+        n: n-gram的n值，默认为2（bigram）。
+
+    Returns:
+        相似度值，范围[0, 1]。
+    """
     if a == b:
         return 1.0
     if a in b or b in a:
@@ -25,6 +36,15 @@ def _char_ngram_similarity(a: str, b: str, n: int = 2) -> float:
 
 
 def _embedding_similarity(a: str, b: str) -> float:
+    """计算两个字符串的embedding余弦相似度。
+
+    Args:
+        a: 第一个字符串。
+        b: 第二个字符串。
+
+    Returns:
+        相似度值，范围[0, 1]。失败时回退到字符相似度。
+    """
     try:
         from .embedding_service import encode_single, cosine_similarity
         vec_a = encode_single(a)
@@ -36,6 +56,17 @@ def _embedding_similarity(a: str, b: str) -> float:
 
 
 def _combined_similarity(a: str, b: str, desc_a: str, desc_b: str) -> tuple[float, float, float]:
+    """计算名称和描述的综合相似度。
+
+    Args:
+        a: 第一个名称。
+        b: 第二个名称。
+        desc_a: 第一个描述。
+        desc_b: 第二个描述。
+
+    Returns:
+        (名称相似度, 描述相似度, embedding相似度) 三元组。
+    """
     name_sim = _char_ngram_similarity(a, b, 2)
     desc_sim = _char_ngram_similarity(desc_a[:100], desc_b[:100], 2)
     embed_sim = _embedding_similarity(f"{a} {desc_a[:50]}", f"{b} {desc_b[:50]}")
@@ -43,6 +74,14 @@ def _combined_similarity(a: str, b: str, desc_a: str, desc_b: str) -> tuple[floa
 
 
 def _text_chars(kps: list[KnowledgePoint]) -> int:
+    """计算知识点列表的总描述字符数。
+
+    Args:
+        kps: 知识点列表。
+
+    Returns:
+        总字符数。
+    """
     return sum(len(kp.description) for kp in kps)
 
 
@@ -50,6 +89,15 @@ async def integrate_cross_textbooks(
     all_kps: list[KnowledgePoint],
     original_text_chars: int = 0,
 ) -> IntegrationResult:
+    """执行跨教材知识点整合（三层数压缩）。
+
+    Args:
+        all_kps: 所有知识点列表。
+        original_text_chars: 原始文本总字符数，用于计算压缩率。
+
+    Returns:
+        整合结果，包含配对决策、压缩率、覆盖率等统计。
+    """
     if not all_kps:
         return IntegrationResult()
 
@@ -88,6 +136,14 @@ async def integrate_cross_textbooks(
 async def _layer1_semantic_dedup(
     all_kps: list[KnowledgePoint],
 ) -> list[IntegrationPair]:
+    """第一层：语义去重，识别跨教材的相似知识点对。
+
+    Args:
+        all_kps: 所有知识点列表。
+
+    Returns:
+        整合配对决策列表。
+    """
     cross_pairs: list[tuple[KnowledgePoint, KnowledgePoint, float, float]] = []
 
     for i in range(len(all_kps)):
@@ -175,6 +231,15 @@ async def _layer2_redundancy_simplify(
     all_kps: list[KnowledgePoint],
     pairs: list[IntegrationPair],
 ) -> list[KnowledgePoint]:
+    """第二层：冗余简化，合并相同概念的知识点。
+
+    Args:
+        all_kps: 所有知识点列表。
+        pairs: 整合配对决策列表。
+
+    Returns:
+        简化后的知识点列表。
+    """
     merge_pairs = [p for p in pairs if p.decision == IntegrationDecision.MERGE and p.merged_content]
     if not merge_pairs:
         return all_kps
@@ -200,6 +265,16 @@ async def _layer3_content_triage(
     pairs: list[IntegrationPair],
     original_text_chars: int,
 ) -> tuple[list[KnowledgePoint], set[str]]:
+    """第三层：内容筛选，确保压缩到30%以内。
+
+    Args:
+        kps: 知识点列表。
+        pairs: 整合配对决策列表。
+        original_text_chars: 原始文本总字符数。
+
+    Returns:
+        (最终知识点集合, 被移除ID集合) 元组。
+    """
     current_chars = _text_chars(kps)
     target_chars = original_text_chars * 0.30
 
@@ -255,6 +330,15 @@ def _check_dependency_integrity(
     final_kps: list[KnowledgePoint],
     pairs: list[IntegrationPair],
 ) -> dict:
+    """检查整合后的依赖完整性。
+
+    Args:
+        final_kps: 最终知识点列表。
+        pairs: 整合配对决策列表。
+
+    Returns:
+        完整性报告字典。
+    """
     final_ids = {kp.id for kp in final_kps}
     final_names = {kp.name for kp in final_kps}
 
@@ -275,6 +359,15 @@ def _check_coverage(
     original: list[KnowledgePoint],
     final: list[KnowledgePoint],
 ) -> dict:
+    """检查各类型知识点的覆盖率。
+
+    Args:
+        original: 原始知识点列表。
+        final: 最终知识点列表。
+
+    Returns:
+        各类型覆盖率字典。
+    """
     by_type_orig: dict[str, int] = defaultdict(int)
     by_type_final: dict[str, int] = defaultdict(int)
 
@@ -297,6 +390,14 @@ def _check_coverage(
 
 
 def _clean_json(text: str) -> str:
+    """清理LLM返回的JSON字符串，移除markdown代码块标记。
+
+    Args:
+        text: 原始文本。
+
+    Returns:
+        清理后的JSON字符串。
+    """
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -312,7 +413,12 @@ def _clean_json(text: str) -> str:
     return text.strip()
 
 
-def apply_integration(integration: IntegrationResult):
+def apply_integration(integration: IntegrationResult) -> None:
+    """应用整合决策到知识图谱。
+
+    Args:
+        integration: 整合结果对象。
+    """
     from . import graph_service
 
     for pair in integration.pairs:
