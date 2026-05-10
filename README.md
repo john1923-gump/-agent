@@ -37,7 +37,35 @@
 
 ## 快速开始
 
-### 1. 安装依赖
+### Docker一键部署（推荐）
+
+```bash
+# 克隆项目
+git clone git@github.com:john1923-gump/-agent.git
+cd -agent
+
+# 设置环境变量（可选，默认使用示例配置）
+cp backend/.env.example backend/.env
+# 编辑 backend/.env 配置你的API密钥
+
+# 启动所有服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+访问：
+- 前端应用：http://localhost:3000
+- 后端API：http://localhost:8000
+- API文档：http://localhost:8000/docs
+
+### 手动安装
+
+#### 1. 安装依赖
 
 ```bash
 # 后端
