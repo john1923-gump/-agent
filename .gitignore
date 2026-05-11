@@ -44,6 +44,13 @@ frontend/public/avatars/
 *.doc
 *.docx
 
+# ngrok and executables
+ngrok.exe
+ngrok.zip
+ngrok
+*.exe
+*.zip
+
 # Logs
 *.log
 npm-debug.log*
